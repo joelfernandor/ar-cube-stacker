@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>AR Cube Stacker - iPad Studio</title>
+  <link rel="stylesheet" href="style.css">
+
+  <!-- CDNs for Web Graphics, Physics, and Vision -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+  <!-- Camera Stream Background -->
+  <video id="webcam" playsinline webkit-playsinline muted></video>
+
+  <!-- 3D Three.js Render Canvas -->
+  <div id="canvas-container"></div>
+
+  <!-- Real-Time Visual Hand Cursor Overlay -->
+  <div id="hand-cursor" class="hidden"></div>
+
+  <!-- Target Reticle Overlay -->
+  <div id="center-reticle"></div>
+
+  <!-- HUD Control Layer -->
+  <div id="hud-container">
+    <div id="metrics-bar" class="hidden">
+      <div class="badge">CUBES: <span id="cube-count">0</span></div>
+      <div class="badge">HEIGHT: <span id="tower-height">0.00 m</span></div>
+    </div>
+
+    <div id="instruction-banner">
+      Aim at desk/table surface in front of you and set area
+    </div>
+
+    <div id="action-controls">
+      <button id="btn-set-area" class="btn btn-green">SET PLAY AREA HERE</button>
+      <button id="btn-drop-cube" class="btn btn-cyan hidden">DROP NEW CUBE</button>
+      <button id="btn-reset" class="btn btn-red hidden">RESET SPACE</button>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

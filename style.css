@@ -1,0 +1,148 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body, html {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: #000;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* Camera Video Viewport */
+#webcam {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  object-fit: cover;
+  z-index: 1;
+}
+
+/* 3D Scene Layer */
+#canvas-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* Live Hand Cursor */
+#hand-cursor {
+  position: absolute;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+  background: rgba(0, 255, 255, 0.7);
+  box-shadow: 0 0 15px rgba(0, 255, 255, 0.8);
+  transform: translate(-50%, -50%);
+  z-index: 10;
+  pointer-events: none;
+  transition: background 0.1s, transform 0.05s ease-out;
+}
+
+#hand-cursor.pinching {
+  background: rgba(0, 255, 120, 0.95);
+  transform: translate(-50%, -50%) scale(1.3);
+  box-shadow: 0 0 20px rgba(0, 255, 120, 1);
+}
+
+/* Reticle Target Ring */
+#center-reticle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 36px;
+  height: 36px;
+  border: 3px solid rgba(0, 255, 255, 0.8);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 12px rgba(0, 255, 255, 0.6);
+  z-index: 5;
+  pointer-events: none;
+}
+
+/* HUD Overlay Elements */
+#hud-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 24px;
+  pointer-events: none;
+}
+
+#metrics-bar {
+  display: flex;
+  gap: 16px;
+  justify-content: flex-end;
+}
+
+.badge {
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  padding: 10px 18px;
+  border-radius: 12px;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.badge span {
+  color: #00ffff;
+}
+
+#instruction-banner {
+  align-self: center;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: #ffffff;
+  padding: 12px 24px;
+  border-radius: 14px;
+  font-size: 16px;
+  font-weight: 600;
+  text-align: center;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+#action-controls {
+  align-self: center;
+  display: flex;
+  gap: 20px;
+  pointer-events: auto;
+}
+
+.btn {
+  border: none;
+  outline: none;
+  padding: 16px 32px;
+  border-radius: 40px;
+  font-weight: 800;
+  font-size: 16px;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.btn-green { background: #00ff88; color: #000; }
+.btn-cyan { background: #00ffff; color: #000; }
+.btn-red { background: rgba(255, 60, 60, 0.85); color: #fff; }
+
+.hidden { display: none !important; }

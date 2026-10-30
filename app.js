@@ -167,7 +167,8 @@ function spawnCube(x, y, z) {
 }
 
 // 6. MediaPipe Hand Tracking Setup (Rear Camera)
-function initHandTracking() {
+// MediaPipe Hand Tracking configured for iPad 0.5x Ultra Wide Camera
+async function initHandTracking() {
   const hands = new Hands({
     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
   });
@@ -181,16 +182,41 @@ function initHandTracking() {
 
   hands.onResults(onHandResults);
 
-  const cameraUtils = new Camera(videoElement, {
-    onFrame: async () => {
-      await hands.send({ image: videoElement });
-    },
-    width: 1280,
-    height: 720,
-    facingMode: 'environment'
-  });
+  try {
+    // 1. Initial request to obtain permission (required before Safari exposes lens labels)
+    const tempStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    tempStream.getTracks().forEach(track => track.stop());
 
-  cameraUtils.start();
+    // 2. Enumerate connected camera devices
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoInputDevices = devices.filter(d => d.kind === 'videoinput');
+
+    // 3. Search for the Ultra Wide camera lens
+    const ultraWideCamera = videoInputDevices.find(device => {
+      const label = device.label.toLowerCase();
+      return label.includes('ultra wide') || label.includes('ultrawide') || label.includes('back camera 1');
+    });
+
+    // 4. Configure constraints: Use Ultra Wide deviceId if available, fallback to environment
+    const videoConstraints = ultraWideCamera
+      ? { deviceId: { exact: ultraWideCamera.deviceId } }
+      : { facingMode: { ideal: 'environment' } };
+
+    // 5. Start camera stream with selected lens
+    const cameraUtils = new Camera(videoElement, {
+      onFrame: async () => {
+        await hands.send({ image: videoElement });
+      },
+      width: 1280,
+      height: 720,
+      ...videoConstraints
+    });
+
+    cameraUtils.start();
+
+  } catch (err) {
+    console.error("Camera error:", err);
+  }
 }
 
 function onHandResults(results) {

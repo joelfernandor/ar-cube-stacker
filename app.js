@@ -168,6 +168,7 @@ function spawnCube(x, y, z) {
 
 // 6. MediaPipe Hand Tracking Setup (Rear Camera)
 // MediaPipe Hand Tracking configured for iPad 0.5x Ultra Wide Camera
+// Native WebRTC Hand Tracking Engine with Ultra-Wide Rear Lens Selection
 async function initHandTracking() {
   const hands = new Hands({
     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
@@ -183,39 +184,77 @@ async function initHandTracking() {
   hands.onResults(onHandResults);
 
   try {
-    // 1. Initial request to obtain permission (required before Safari exposes lens labels)
-    const tempStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-    tempStream.getTracks().forEach(track => track.stop());
+    // 1. Force initial permission request using REAR camera
+    const initialStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' } }
+    });
+    initialStream.getTracks().forEach(track => track.stop()); // Close temporary stream
 
-    // 2. Enumerate connected camera devices
+    // 2. Enumerate all connected video input devices
     const devices = await navigator.mediaDevices.enumerateDevices();
-    const videoInputDevices = devices.filter(d => d.kind === 'videoinput');
+    const videoDevices = devices.filter(d => d.kind === 'videoinput');
 
-    // 3. Search for the Ultra Wide camera lens
-    const ultraWideCamera = videoInputDevices.find(device => {
-      const label = device.label.toLowerCase();
-      return label.includes('ultra wide') || label.includes('ultrawide') || label.includes('back camera 1');
+    // 3. Filter OUT all front/selfie/FaceTime cameras
+    const backCameras = videoDevices.filter(d => {
+      const label = d.label.toLowerCase();
+      return !label.includes('front') && !label.includes('user') && !label.includes('selfie') && !label.includes('facetime');
     });
 
-    // 4. Configure constraints: Use Ultra Wide deviceId if available, fallback to environment
-    const videoConstraints = ultraWideCamera
-      ? { deviceId: { exact: ultraWideCamera.deviceId } }
-      : { facingMode: { ideal: 'environment' } };
+    // 4. Search for Ultra Wide lens among rear cameras
+    let targetDevice = backCameras.find(d => {
+      const label = d.label.toLowerCase();
+      return label.includes('ultra') || label.includes('0.5') || label.includes('back camera 1') || label.includes('back 1');
+    });
 
-    // 5. Start camera stream with selected lens
-    const cameraUtils = new Camera(videoElement, {
-      onFrame: async () => {
+    // On dual-camera iPads, the Ultra Wide camera is typically the second rear entry
+    if (!targetDevice && backCameras.length > 1) {
+      targetDevice = backCameras[1];
+    } else if (!targetDevice && backCameras.length > 0) {
+      targetDevice = backCameras[0];
+    }
+
+    // 5. Build explicit video constraints
+    const constraints = {
+      video: targetDevice 
+        ? { deviceId: { exact: targetDevice.deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+        : { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
+    };
+
+    // 6. Start video stream directly on videoElement
+    const finalStream = await navigator.mediaDevices.getUserMedia(constraints);
+    videoElement.srcObject = finalStream;
+    await videoElement.play();
+
+    // 7. Continuous processing loop feeding frames to MediaPipe
+    async function processFrame() {
+      if (!videoElement.paused && !videoElement.ended) {
         await hands.send({ image: videoElement });
-      },
-      width: 1280,
-      height: 720,
-      ...videoConstraints
-    });
-
-    cameraUtils.start();
+      }
+      requestAnimationFrame(processFrame);
+    }
+    processFrame();
 
   } catch (err) {
-    console.error("Camera error:", err);
+    console.error("Camera setup error, falling back to standard rear camera:", err);
+    
+    // Safety Fallback: Default directly to environment camera
+    try {
+      const fallbackStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } }
+      });
+      videoElement.srcObject = fallbackStream;
+      await videoElement.play();
+
+      async function processFallbackFrame() {
+        if (!videoElement.paused && !videoElement.ended) {
+          await hands.send({ image: videoElement });
+        }
+        requestAnimationFrame(processFallbackFrame);
+      }
+      processFallbackFrame();
+    } catch (fallbackErr) {
+      alert("Could not access camera. Please allow camera permissions in Safari.");
+    }
   }
 }
 

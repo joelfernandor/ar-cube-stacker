@@ -1,20 +1,25 @@
 // Application State
 let scene, camera, renderer, world;
 let playAreaSet = false;
-let groundBody, playMatMesh;
+let groundBody, playMatMesh, reticleMesh;
 let cubes = [];
 let activeCube = null;
+
+// Camera Pitch & Surface Tracking State
+let cameraPitch = 0.5; // Default pitch angle (~30 degrees down)
+let estimatedSurfaceY = -0.35; // Default desk level (35cm below camera)
+let currentReticlePos = new THREE.Vector3(0, -0.35, -0.45);
 
 // Gestures & Tracking State
 let isPinching = false;
 let lastPinchTime = 0;
 const raycaster = new THREE.Raycaster();
-const mouse = new THREE.Vector2();
+const mouse = new THREE.Vector2(0, 0); // Center screen raycast
 
 // DOM References
 const videoElement = document.getElementById('webcam');
 const cursorElement = document.getElementById('hand-cursor');
-const reticleElement = document.getElementById('center-reticle');
+const reticle2DElement = document.getElementById('center-reticle');
 const metricsBar = document.getElementById('metrics-bar');
 const instructionBanner = document.getElementById('instruction-banner');
 const btnSetArea = document.getElementById('btn-set-area');
@@ -27,7 +32,7 @@ const towerHeightLabel = document.getElementById('tower-height');
 function initEngine() {
   const container = document.getElementById('canvas-container');
 
-  // Three.js Render Scene Setup
+  // Three.js Render Scene
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.01, 100);
   camera.position.set(0, 0, 0);
@@ -38,8 +43,8 @@ function initEngine() {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   container.appendChild(renderer.domElement);
 
-  // Realistic Lighting
-  const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+  // Lighting
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
   scene.add(ambientLight);
 
   const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
@@ -49,15 +54,17 @@ function initEngine() {
 
   // Cannon.js Physics Engine Setup
   world = new CANNON.World();
-  world.gravity.set(0, -9.82, 0); // Real Earth gravity
+  world.gravity.set(0, -9.82, 0);
 
-  // Material with High Friction & Zero Bounce for Solid Stacking
   const defaultMat = new CANNON.Material('default');
   const contactMat = new CANNON.ContactMaterial(defaultMat, defaultMat, {
     friction: 1.0,
-    restitution: 0.0
+    restitution: 0.0 // Zero bounce
   });
   world.addContactMaterial(contactMat);
+
+  setupReticle3D();
+  setupDeviceOrientation();
 
   window.addEventListener('resize', onResize);
   setupUIEvents();
@@ -65,10 +72,57 @@ function initEngine() {
   renderLoop();
 }
 
-// 2. Set Up Play Area Surface
+// 2. Setup Real-time 3D Placement Reticle Ring
+function setupReticle3D() {
+  const ringGeo = new THREE.RingGeometry(0.08, 0.1, 32);
+  const ringMat = new THREE.MeshBasicMaterial({ 
+    color: 0x00ffff, 
+    side: THREE.DoubleSide, 
+    transparent: true, 
+    opacity: 0.8 
+  });
+  reticleMesh = new THREE.Mesh(ringGeo, ringMat);
+  reticleMesh.rotation.x = -Math.PI / 2; // Flat horizontal plane
+  scene.add(reticleMesh);
+}
+
+// Track iPad Gyroscope Pitch Angle
+function setupDeviceOrientation() {
+  window.addEventListener('deviceorientation', (event) => {
+    if (event.beta) {
+      // Convert beta angle (degrees tilt) to radians
+      let pitchRad = (event.beta - 45) * (Math.PI / 180);
+      cameraPitch = Math.max(0.1, Math.min(1.4, pitchRad));
+    }
+  });
+}
+
+// Update Reticle Ring Position dynamically based on Camera Aiming
+function updateReticlePosition() {
+  if (playAreaSet) return;
+
+  // Perform Raycast from Center Screen
+  raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+  
+  // Intersect ray with estimated horizontal ground plane (y = estimatedSurfaceY)
+  const ray = raycaster.ray;
+  if (ray.direction.y < 0) {
+    const t = (estimatedSurfaceY - ray.origin.y) / ray.direction.y;
+    currentReticlePos.copy(ray.origin).addScaledVector(ray.direction, t);
+
+    // Keep reticle within comfortable distance (0.25m to 0.8m)
+    currentReticlePos.z = Math.max(-0.8, Math.min(-0.25, currentReticlePos.z));
+    
+    reticleMesh.position.copy(currentReticlePos);
+    reticleMesh.position.y = estimatedSurfaceY;
+  }
+}
+
+// 3. Confirm Play Area Surface
 function confirmPlayArea() {
   playAreaSet = true;
-  reticleElement.classList.add('hidden');
+  reticleMesh.visible = false;
+  if (reticle2DElement) reticle2DElement.classList.add('hidden');
   btnSetArea.classList.add('hidden');
   
   metricsBar.classList.remove('hidden');
@@ -77,7 +131,7 @@ function confirmPlayArea() {
   
   instructionBanner.innerText = "Pinch & drag to stack • Double-pinch in mid-air to spawn cube";
 
-  // Desktop Play Mat Mesh (50cm x 50cm)
+  // Lock 50cm x 50cm Green Play Mat at Reticle Location
   const geo = new THREE.PlaneGeometry(0.5, 0.5);
   const mat = new THREE.MeshStandardMaterial({ 
     color: 0x00ff88, 
@@ -87,20 +141,20 @@ function confirmPlayArea() {
   });
   playMatMesh = new THREE.Mesh(geo, mat);
   playMatMesh.rotation.x = -Math.PI / 2;
-  playMatMesh.position.set(0, -0.25, -0.45); // Positioned 45cm away at desk level
+  playMatMesh.position.copy(currentReticlePos);
   scene.add(playMatMesh);
 
-  // Immovable Ground Static Physics Collider
+  // Lock Static Immovable Physics Body at exact Reticle Location
   const groundShape = new CANNON.Box(new CANNON.Vec3(0.25, 0.005, 0.25));
-  groundBody = new CANNON.Body({ mass: 0 }); // Mass 0 = Fixed ground
+  groundBody = new CANNON.Body({ mass: 0 }); // Mass 0 = Static floor
   groundBody.addShape(groundShape);
-  groundBody.position.set(0, -0.255, -0.45);
+  groundBody.position.set(currentReticlePos.x, currentReticlePos.y - 0.005, currentReticlePos.z);
   world.addBody(groundBody);
 }
 
-// 3. Spawn 6cm Weighted Cube
+// 4. Spawn 6cm Weighted Cubes
 function spawnCube(x, y, z) {
-  const size = 0.06; // 6cm box
+  const size = 0.06;
   const colors = [0x00ffff, 0x00ff88, 0xffaa00, 0xff0055, 0xaa00ff];
   const chosenColor = colors[Math.floor(Math.random() * colors.length)];
 
@@ -112,7 +166,7 @@ function spawnCube(x, y, z) {
   mesh.receiveShadow = true;
   scene.add(mesh);
 
-  // Cannon Physics Rigid Body (1.2 kg heavy feel)
+  // Cannon Rigid Body (1.2 kg heavy feel)
   const shape = new CANNON.Box(new CANNON.Vec3(size / 2, size / 2, size / 2));
   const body = new CANNON.Body({ mass: 1.2 });
   body.addShape(shape);
@@ -123,8 +177,7 @@ function spawnCube(x, y, z) {
   updateTowerStats();
 }
 
-// 4. MediaPipe Hand Tracking Setup
-// 4. MediaPipe Hand Tracking Setup (Configured for Rear Camera)
+// 5. MediaPipe Hand Tracking Setup (Rear Camera)
 function initHandTracking() {
   const hands = new Hands({
     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
@@ -145,31 +198,27 @@ function initHandTracking() {
     },
     width: 1280,
     height: 720,
-    facingMode: 'environment' // Forces iPad back camera
+    facingMode: 'environment'
   });
 
   cameraUtils.start();
 }
 
-// Process Hand Frames
+// Process Hand Gesture Frames
 function onHandResults(results) {
   if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
     const landmarks = results.multiHandLandmarks[0];
 
-    // Index Tip (#8) and Thumb Tip (#4)
     const indexTip = landmarks[8];
     const thumbTip = landmarks[4];
 
-    // Screen Space Center Point
     const screenX = ((indexTip.x + thumbTip.x) / 2) * window.innerWidth;
     const screenY = ((indexTip.y + thumbTip.y) / 2) * window.innerHeight;
 
-    // Position Hand Cursor Dot
     cursorElement.classList.remove('hidden');
     cursorElement.style.left = `${screenX}px`;
     cursorElement.style.top = `${screenY}px`;
 
-    // Measure Pinch Distance
     const pinchDist = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
     const currentlyPinching = pinchDist < 0.08;
 
@@ -179,7 +228,7 @@ function onHandResults(results) {
       cursorElement.classList.remove('pinching');
     }
 
-    // Double Pinch Gesture (Spawn Cube)
+    // Double Pinch Gesture Spawning
     if (currentlyPinching && !isPinching) {
       const now = Date.now();
       if (now - lastPinchTime < 400 && playAreaSet) {
@@ -198,14 +247,13 @@ function onHandResults(results) {
   }
 }
 
-// 5. 3D Hand Grab & Vertical Stacking Interaction
+// 6. 3D Hand Grab & Vertical Lift Logic
 function handlePinchInteraction(screenX, screenY, pinching) {
   mouse.x = (screenX / window.innerWidth) * 2 - 1;
   mouse.y = -(screenY / window.innerHeight) * 2 + 1;
 
   if (pinching) {
     if (!activeCube) {
-      // Pick up closest cube
       raycaster.setFromCamera(mouse, camera);
       const intersects = raycaster.intersectObjects(cubes.map(c => c.mesh));
 
@@ -213,21 +261,19 @@ function handlePinchInteraction(screenX, screenY, pinching) {
         const hitMesh = intersects[0].object;
         activeCube = cubes.find(c => c.mesh === hitMesh);
         if (activeCube) {
-          activeCube.body.type = CANNON.Body.KINEMATIC; // Freeze physics during hold
+          activeCube.body.type = CANNON.Body.KINEMATIC;
           activeCube.body.velocity.set(0, 0, 0);
         }
       }
     } else {
-      // Reposition held cube in 3D air along camera ray
       raycaster.setFromCamera(mouse, camera);
       const targetPos = new THREE.Vector3();
-      raycaster.ray.at(0.45, targetPos);
+      raycaster.ray.at(0.40, targetPos);
 
       activeCube.body.position.set(targetPos.x, targetPos.y, targetPos.z);
     }
   } else {
     if (activeCube) {
-      // Drop cube on gesture release
       activeCube.body.type = CANNON.Body.DYNAMIC;
       activeCube.body.wakeUp();
       activeCube = null;
@@ -242,20 +288,20 @@ function spawnCubeAtScreenPoint(screenX, screenY) {
 
   raycaster.setFromCamera(mouse, camera);
   const targetPos = new THREE.Vector3();
-  raycaster.ray.at(0.40, targetPos);
+  raycaster.ray.at(0.35, targetPos);
 
   spawnCube(targetPos.x, targetPos.y, targetPos.z);
 }
 
 function updateTowerStats() {
   cubeCountLabel.innerText = cubes.length;
-  let maxY = 0;
+  let maxY = currentReticlePos.y;
   cubes.forEach(c => {
     if (c.body.position.y > maxY) {
       maxY = c.body.position.y;
     }
   });
-  const heightInMeters = Math.max(0, maxY - (-0.25)).toFixed(2);
+  const heightInMeters = Math.max(0, maxY - currentReticlePos.y).toFixed(2);
   towerHeightLabel.innerText = `${heightInMeters} m`;
 }
 
@@ -270,7 +316,9 @@ function resetSpace() {
 
 function setupUIEvents() {
   btnSetArea.addEventListener('click', confirmPlayArea);
-  btnDropCube.addEventListener('click', () => spawnCube(0, 0.1, -0.45));
+  btnDropCube.addEventListener('click', () => {
+    spawnCube(currentReticlePos.x, currentReticlePos.y + 0.35, currentReticlePos.z);
+  });
   btnReset.addEventListener('click', resetSpace);
 }
 
@@ -283,10 +331,12 @@ function onResize() {
 function renderLoop() {
   requestAnimationFrame(renderLoop);
 
-  // Step Physics Simulation (60fps)
+  updateReticlePosition();
+
+  // Step Physics Engine (60fps)
   world.step(1 / 60);
 
-  // Synchronize 3D Meshes with Physics Rigid Bodies
+  // Sync 3D Meshes to Physics Rigid Bodies
   cubes.forEach(c => {
     c.mesh.position.copy(c.body.position);
     c.mesh.quaternion.copy(c.body.quaternion);

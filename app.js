@@ -124,6 +124,7 @@ function spawnCube(x, y, z) {
 }
 
 // 4. MediaPipe Hand Tracking Setup
+// 4. MediaPipe Hand Tracking Setup (Configured for Rear Camera)
 function initHandTracking() {
   const hands = new Hands({
     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
@@ -143,7 +144,8 @@ function initHandTracking() {
       await hands.send({ image: videoElement });
     },
     width: 1280,
-    height: 720
+    height: 720,
+    facingMode: 'environment' // Forces iPad back camera
   });
 
   cameraUtils.start();

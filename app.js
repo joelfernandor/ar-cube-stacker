@@ -1,13 +1,15 @@
 // Application State
 let scene, camera, renderer, world;
 let playAreaSet = false;
-let groundBody, playMatMesh, reticleMesh;
+let groundBody, playMatMesh;
 let cubes = [];
 let activeCube = null;
 
-// Ground Plane Baseline (-0.35m below iPad camera level)
-const groundY = -0.35;
-let playAreaPosition = new THREE.Vector3(0, groundY, -0.45);
+// Two-Hand Surface Placement State
+let leftHandPos = new THREE.Vector3(-0.15, -0.2, -0.45);
+let rightHandPos = new THREE.Vector3(0.15, -0.2, -0.45);
+let dynamicSurfacePos = new THREE.Vector3(0, -0.2, -0.45);
+let dynamicSurfaceWidth = 0.5;
 
 // Gestures & Tracking State
 let isPinching = false;
@@ -17,8 +19,8 @@ const mouse = new THREE.Vector2();
 
 // DOM References
 const videoElement = document.getElementById('webcam');
-const cursorElement = document.getElementById('hand-cursor');
-const reticle2DElement = document.getElementById('center-reticle');
+const cursor0 = document.getElementById('hand-cursor-0');
+const cursor1 = document.getElementById('hand-cursor-1');
 const metricsBar = document.getElementById('metrics-bar');
 const instructionBanner = document.getElementById('instruction-banner');
 const btnSetArea = document.getElementById('btn-set-area');
@@ -45,23 +47,22 @@ function initEngine() {
   scene.add(ambientLight);
 
   const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
-  dirLight.position.set(0.5, 2, 1);
+  dirLight.position.set(0, 2, 1);
   dirLight.castShadow = true;
   scene.add(dirLight);
 
-  // Physics Engine
+  // Physics World
   world = new CANNON.World();
   world.gravity.set(0, -9.82, 0);
 
   const defaultMat = new CANNON.Material('default');
   const contactMat = new CANNON.ContactMaterial(defaultMat, defaultMat, {
     friction: 1.0,
-    restitution: 0.0 // Zero bounciness for solid stacking
+    restitution: 0.0 // Zero bounciness
   });
   world.addContactMaterial(contactMat);
 
-  setupReticle3D();
-  setupTouchPlanePicker();
+  setupDynamicSurfacePreview();
 
   window.addEventListener('resize', onResize);
   setupUIEvents();
@@ -69,80 +70,76 @@ function initEngine() {
   renderLoop();
 }
 
-// 2. Setup 3D Targeting Reticle
-function setupReticle3D() {
-  const ringGeo = new THREE.RingGeometry(0.06, 0.08, 32);
-  const ringMat = new THREE.MeshBasicMaterial({ 
-    color: 0x00ffff, 
-    side: THREE.DoubleSide, 
-    transparent: true, 
-    opacity: 0.8 
-  });
-  reticleMesh = new THREE.Mesh(ringGeo, ringMat);
-  reticleMesh.rotation.x = -Math.PI / 2;
-  reticleMesh.position.copy(playAreaPosition);
-  scene.add(reticleMesh);
-}
-
-// 3. Screen Touch Raycaster to Pick Surface Point
-function setupTouchPlanePicker() {
-  window.addEventListener('pointerdown', (event) => {
-    if (playAreaSet) return;
-    
-    // Ignore button taps
-    if (event.target.tagName === 'BUTTON') return;
-
-    // Convert touch/click position to Normalized Device Coordinates (-1 to +1)
-    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-
-    // Raycast from camera to fixed horizontal desk plane
-    raycaster.setFromCamera(mouse, camera);
-    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -groundY);
-    const target = new THREE.Vector3();
-
-    if (raycaster.ray.intersectPlane(plane, target)) {
-      playAreaPosition.copy(target);
-      reticleMesh.position.copy(playAreaPosition);
-    }
-  });
-}
-
-// 4. Lock Play Area on Selected Touch Location
-function confirmPlayArea() {
-  playAreaSet = true;
-  reticleMesh.visible = false;
-  if (reticle2DElement) reticle2DElement.classList.add('hidden');
-  btnSetArea.classList.add('hidden');
-  
-  metricsBar.classList.remove('hidden');
-  btnDropCube.classList.remove('hidden');
-  btnReset.classList.remove('hidden');
-  
-  instructionBanner.innerText = "Pinch & drag to stack • Double-pinch in mid-air to spawn cube";
-
-  // Lock 50cm x 50cm Green Table Mat
-  const geo = new THREE.PlaneGeometry(0.5, 0.5);
-  const mat = new THREE.MeshStandardMaterial({ 
-    color: 0x00ff88, 
-    transparent: true, 
-    opacity: 0.35, 
-    side: THREE.DoubleSide 
+// 2. Setup Glowing Preview Surface for Two-Hand Placement
+function setupDynamicSurfacePreview() {
+  const geo = new THREE.PlaneGeometry(0.5, 0.3);
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x00ffff,
+    transparent: true,
+    opacity: 0.5,
+    side: THREE.DoubleSide
   });
   playMatMesh = new THREE.Mesh(geo, mat);
   playMatMesh.rotation.x = -Math.PI / 2;
-  playMatMesh.position.copy(playAreaPosition);
+  playMatMesh.position.copy(dynamicSurfacePos);
   scene.add(playMatMesh);
+}
 
-  // Static Immovable Physics Floor
-  const groundShape = new CANNON.Box(new CANNON.Vec3(0.25, 0.005, 0.25));
-  groundBody = new CANNON.Body({ mass: 0 }); // Mass 0 = Static floor
+// Update Surface Position & Width in real time based on 2 Hands
+function updateSurfaceFromTwoHands(h1, h2) {
+  if (playAreaSet) return;
+
+  // Convert normalized hand points to 3D camera space
+  const ray1 = getRayFromNormalizedScreen(h1.x, h1.y);
+  const ray2 = getRayFromNormalizedScreen(h2.x, h2.y);
+
+  ray1.at(0.45, leftHandPos);
+  ray2.at(0.45, rightHandPos);
+
+  // Midpoint between hands becomes surface center
+  dynamicSurfacePos.addVectors(leftHandPos, rightHandPos).multiplyScalar(0.5);
+
+  // Distance between hands defines surface width
+  dynamicSurfaceWidth = Math.max(0.25, Math.min(0.8, leftHandPos.distanceTo(rightHandPos)));
+
+  playMatMesh.position.copy(dynamicSurfacePos);
+  playMatMesh.scale.set(dynamicSurfaceWidth / 0.5, 1, 1);
+}
+
+function getRayFromNormalizedScreen(nx, ny) {
+  // Mirror X coordinate because front camera video is mirrored (scaleX(-1))
+  const mirroredX = 1.0 - nx;
+  mouse.x = mirroredX * 2 - 1;
+  mouse.y = -ny * 2 + 1;
+
+  raycaster.setFromCamera(mouse, camera);
+  return raycaster.ray;
+}
+
+// 3. Lock Virtual Surface in 3D Space
+function confirmPlayArea() {
+  playAreaSet = true;
+  btnSetArea.classList.add('hidden');
+
+  metricsBar.classList.remove('hidden');
+  btnDropCube.classList.remove('hidden');
+  btnReset.classList.remove('hidden');
+
+  instructionBanner.innerText = "Pinch & drag to stack • Double-pinch in mid-air to spawn cube";
+
+  // Lock Surface Appearance
+  playMatMesh.material.color.setHex(0x00ff88);
+  playMatMesh.material.opacity = 0.35;
+
+  // Lock Static Immovable Cannon Physics Floor at Virtual Surface position
+  const groundShape = new CANNON.Box(new CANNON.Vec3(dynamicSurfaceWidth / 2, 0.005, 0.2));
+  groundBody = new CANNON.Body({ mass: 0 }); // Mass 0 = Fixed floor
   groundBody.addShape(groundShape);
-  groundBody.position.set(playAreaPosition.x, playAreaPosition.y - 0.005, playAreaPosition.z);
+  groundBody.position.set(dynamicSurfacePos.x, dynamicSurfacePos.y - 0.005, dynamicSurfacePos.z);
   world.addBody(groundBody);
 }
 
-// 5. Spawn Weighted 6cm Cubes
+// 4. Spawn Heavy 6cm Cubes
 function spawnCube(x, y, z) {
   const size = 0.06;
   const colors = [0x00ffff, 0x00ff88, 0xffaa00, 0xff0055, 0xaa00ff];
@@ -166,16 +163,14 @@ function spawnCube(x, y, z) {
   updateTowerStats();
 }
 
-// 6. MediaPipe Hand Tracking Setup (Rear Camera)
-// MediaPipe Hand Tracking configured for iPad 0.5x Ultra Wide Camera
-// Native WebRTC Hand Tracking Engine with Ultra-Wide Rear Lens Selection
+// 5. MediaPipe Hand Tracking Setup (Front Selfie Camera, 2 Hands)
 async function initHandTracking() {
   const hands = new Hands({
     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
   });
 
   hands.setOptions({
-    maxNumHands: 1,
+    maxNumHands: 2, // Track up to 2 hands simultaneously
     modelComplexity: 1,
     minDetectionConfidence: 0.5,
     minTrackingConfidence: 0.5
@@ -184,48 +179,14 @@ async function initHandTracking() {
   hands.onResults(onHandResults);
 
   try {
-    // 1. Force initial permission request using REAR camera
-    const initialStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' } }
-    });
-    initialStream.getTracks().forEach(track => track.stop()); // Close temporary stream
-
-    // 2. Enumerate all connected video input devices
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const videoDevices = devices.filter(d => d.kind === 'videoinput');
-
-    // 3. Filter OUT all front/selfie/FaceTime cameras
-    const backCameras = videoDevices.filter(d => {
-      const label = d.label.toLowerCase();
-      return !label.includes('front') && !label.includes('user') && !label.includes('selfie') && !label.includes('facetime');
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false
     });
 
-    // 4. Search for Ultra Wide lens among rear cameras
-    let targetDevice = backCameras.find(d => {
-      const label = d.label.toLowerCase();
-      return label.includes('ultra') || label.includes('0.5') || label.includes('back camera 1') || label.includes('back 1');
-    });
-
-    // On dual-camera iPads, the Ultra Wide camera is typically the second rear entry
-    if (!targetDevice && backCameras.length > 1) {
-      targetDevice = backCameras[1];
-    } else if (!targetDevice && backCameras.length > 0) {
-      targetDevice = backCameras[0];
-    }
-
-    // 5. Build explicit video constraints
-    const constraints = {
-      video: targetDevice 
-        ? { deviceId: { exact: targetDevice.deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
-        : { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }
-    };
-
-    // 6. Start video stream directly on videoElement
-    const finalStream = await navigator.mediaDevices.getUserMedia(constraints);
-    videoElement.srcObject = finalStream;
+    videoElement.srcObject = stream;
     await videoElement.play();
 
-    // 7. Continuous processing loop feeding frames to MediaPipe
     async function processFrame() {
       if (!videoElement.paused && !videoElement.ended) {
         await hands.send({ image: videoElement });
@@ -235,56 +196,52 @@ async function initHandTracking() {
     processFrame();
 
   } catch (err) {
-    console.error("Camera setup error, falling back to standard rear camera:", err);
-    
-    // Safety Fallback: Default directly to environment camera
-    try {
-      const fallbackStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } }
-      });
-      videoElement.srcObject = fallbackStream;
-      await videoElement.play();
-
-      async function processFallbackFrame() {
-        if (!videoElement.paused && !videoElement.ended) {
-          await hands.send({ image: videoElement });
-        }
-        requestAnimationFrame(processFallbackFrame);
-      }
-      processFallbackFrame();
-    } catch (fallbackErr) {
-      alert("Could not access camera. Please allow camera permissions in Safari.");
-    }
+    console.error("Front camera error:", err);
+    alert("Please allow front camera permissions in Safari.");
   }
 }
 
+// Handle Hand Landmarks
 function onHandResults(results) {
-  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-    const landmarks = results.multiHandLandmarks[0];
+  const numHands = results.multiHandLandmarks ? results.multiHandLandmarks.length : 0;
 
+  cursor0.classList.add('hidden');
+  cursor1.classList.add('hidden');
+
+  if (numHands === 2 && !playAreaSet) {
+    // Mode 1: Surface Creation with 2 Hands
+    const h0 = results.multiHandLandmarks[0][8]; // Index tip hand 0
+    const h1 = results.multiHandLandmarks[1][8]; // Index tip hand 1
+
+    positionCursor(cursor0, h0);
+    positionCursor(cursor1, h1);
+
+    updateSurfaceFromTwoHands(h0, h1);
+    instructionBanner.innerText = "Table aligned with hands! Tap LOCK VIRTUAL TABLE";
+
+  } else if (numHands >= 1) {
+    // Mode 2: Cube Stacking & Pinch Control
+    const landmarks = results.multiHandLandmarks[0];
     const indexTip = landmarks[8];
     const thumbTip = landmarks[4];
 
-    const screenX = ((indexTip.x + thumbTip.x) / 2) * window.innerWidth;
-    const screenY = ((indexTip.y + thumbTip.y) / 2) * window.innerHeight;
-
-    cursorElement.classList.remove('hidden');
-    cursorElement.style.left = `${screenX}px`;
-    cursorElement.style.top = `${screenY}px`;
+    positionCursor(cursor0, indexTip);
 
     const pinchDist = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
     const currentlyPinching = pinchDist < 0.08;
 
     if (currentlyPinching) {
-      cursorElement.classList.add('pinching');
+      cursor0.classList.add('pinching');
     } else {
-      cursorElement.classList.remove('pinching');
+      cursor0.classList.remove('pinching');
     }
 
-    // Double Pinch Gesture
+    // Double Pinch Gesture (Spawn Cube)
     if (currentlyPinching && !isPinching) {
       const now = Date.now();
       if (now - lastPinchTime < 400 && playAreaSet) {
+        const screenX = (1.0 - (indexTip.x + thumbTip.x) / 2) * window.innerWidth;
+        const screenY = ((indexTip.y + thumbTip.y) / 2) * window.innerHeight;
         spawnCubeAtScreenPoint(screenX, screenY);
       }
       lastPinchTime = now;
@@ -293,14 +250,25 @@ function onHandResults(results) {
     isPinching = currentlyPinching;
 
     if (playAreaSet) {
+      const screenX = (1.0 - (indexTip.x + thumbTip.x) / 2) * window.innerWidth;
+      const screenY = ((indexTip.y + thumbTip.y) / 2) * window.innerHeight;
       handlePinchInteraction(screenX, screenY, isPinching);
     }
-  } else {
-    cursorElement.classList.add('hidden');
+  } else if (!playAreaSet) {
+    instructionBanner.innerText = "Hold out BOTH hands to span your virtual table surface";
   }
 }
 
-// 7. Hand Grab & Vertical Lifting Logic
+function positionCursor(element, landmark) {
+  element.classList.remove('hidden');
+  // Mirror X coordinate to match video mirror scaleX(-1)
+  const screenX = (1.0 - landmark.x) * window.innerWidth;
+  const screenY = landmark.y * window.innerHeight;
+  element.style.left = `${screenX}px`;
+  element.style.top = `${screenY}px`;
+}
+
+// 6. Pinch Grab & Vertical Lift Logic
 function handlePinchInteraction(screenX, screenY, pinching) {
   mouse.x = (screenX / window.innerWidth) * 2 - 1;
   mouse.y = -(screenY / window.innerHeight) * 2 + 1;
@@ -348,13 +316,13 @@ function spawnCubeAtScreenPoint(screenX, screenY) {
 
 function updateTowerStats() {
   cubeCountLabel.innerText = cubes.length;
-  let maxY = playAreaPosition.y;
+  let maxY = dynamicSurfacePos.y;
   cubes.forEach(c => {
     if (c.body.position.y > maxY) {
       maxY = c.body.position.y;
     }
   });
-  const heightInMeters = Math.max(0, maxY - playAreaPosition.y).toFixed(2);
+  const heightInMeters = Math.max(0, maxY - dynamicSurfacePos.y).toFixed(2);
   towerHeightLabel.innerText = `${heightInMeters} m`;
 }
 
@@ -370,7 +338,7 @@ function resetSpace() {
 function setupUIEvents() {
   btnSetArea.addEventListener('click', confirmPlayArea);
   btnDropCube.addEventListener('click', () => {
-    spawnCube(playAreaPosition.x, playAreaPosition.y + 0.30, playAreaPosition.z);
+    spawnCube(dynamicSurfacePos.x, dynamicSurfacePos.y + 0.30, dynamicSurfacePos.z);
   });
   btnReset.addEventListener('click', resetSpace);
 }
